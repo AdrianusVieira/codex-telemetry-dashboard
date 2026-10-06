@@ -14,12 +14,14 @@ type Session = { id: string; firstSeen: number; lastSeen: number; models: string
   toolStats: { tool: string; count: number; failures: number; medianDurationMs: number | null }[];
   tokenTimeline: TokenPoint[]; activityCount: number; recentEvents: Activity[] }
 type Prompt = { id: string; timestamp: number; text: string | null }
-type Period = '7' | '30' | '90' | 'all' | 'custom'
+type Period = 'today' | '7' | '30' | '90' | 'all' | 'custom'
 
 const number = (value: number) => new Intl.NumberFormat().format(value)
 const compact = (value: number) => new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 const date = (value: number) => new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(value)
-const shortDate = (value: number) => new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(value)
+const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+const dayStart = (value: string) => new Date(`${value}T00:00:00`).getTime()
+const nextDay = (value: string) => { const day = new Date(`${value}T00:00:00`); day.setDate(day.getDate() + 1); return day.getTime() }
 const shortId = (id: string) => id.length > 20 ? `${id.slice(0, 12)}…${id.slice(-6)}` : id
 const safeDecode = (value: string) => { try { return decodeURIComponent(value) } catch { return '' } }
 const time = (ms: number | null) => ms === null ? 'Unavailable' : `${Math.round(ms)} ms`
@@ -36,15 +38,16 @@ function Timeline({ points }: { points: TokenPoint[] }) {
   let total = 0
   for (const point of ordered) { total += point.total; cumulative.push({ timestamp: point.timestamp, total }) }
   const min = ordered[0].timestamp
-  const span = Math.max(1, ordered.at(-1)!.timestamp - min)
-  const x = (timestamp: number) => 30 + (timestamp - min) / span * 730
+  const span = ordered.at(-1)!.timestamp - min
+  const x = (timestamp: number, index: number) => 64 + (span === 0 ? (ordered.length === 1 ? .5 : index / (ordered.length - 1)) : (timestamp - min) / span) * 706
   const y = (value: number) => 205 - value / Math.max(1, total) * 170
-  const path = cumulative.map((point, index) => `${index ? 'L' : 'M'}${x(point.timestamp).toFixed(1)},${y(point.total).toFixed(1)}`).join(' ')
-  return <div className="timeline"><svg viewBox="0 0 790 235" role="img" aria-label="Cumulative observed tokens over time">
-    {[0, .25, .5, .75, 1].map((fraction) => <g key={fraction}><line x1="30" x2="760" y1={205 - fraction * 170} y2={205 - fraction * 170} className="grid-line" /><text x="25" y={210 - fraction * 170} textAnchor="end">{compact(Math.round(total * fraction))}</text></g>)}
-    <path d={path} className="timeline-line" />
-    {cumulative.map((point, index) => <circle key={`${point.timestamp}-${index}`} cx={x(point.timestamp)} cy={y(point.total)} r="3.5" className="timeline-dot"><title>{date(point.timestamp)} · {number(point.total)} cumulative tokens</title></circle>)}
-    <text x="30" y="229">{shortDate(min)}</text><text x="760" y="229" textAnchor="end">{shortDate(ordered.at(-1)!.timestamp)}</text>
+  const path = cumulative.map((point, index) => `${index ? 'L' : 'M'}${x(point.timestamp, index).toFixed(1)},${y(point.total).toFixed(1)}`).join(' ')
+  const area = `M${x(min, 0).toFixed(1)},205 ${path.replace(/^M/, 'L')} L${x(ordered.at(-1)!.timestamp, ordered.length - 1).toFixed(1)},205 Z`
+  return <div className="timeline"><svg viewBox="0 0 800 240" role="img" aria-label="Cumulative observed tokens over time">
+    {[0, .5, 1].map((fraction) => <g key={fraction}><line x1="64" x2="770" y1={205 - fraction * 170} y2={205 - fraction * 170} className="grid-line" /><text x="49" y={210 - fraction * 170} textAnchor="end">{compact(Math.round(total * fraction))}</text></g>)}
+    <path d={area} className="timeline-area" /><path d={path} className="timeline-line" />
+    {cumulative.map((point, index) => <circle key={`${point.timestamp}-${index}`} cx={x(point.timestamp, index)} cy={y(point.total)} r="4.5" className="timeline-dot" tabIndex={0} aria-label={`${date(point.timestamp)}: ${number(ordered[index].total)} tokens in response; ${number(point.total)} cumulative`}><title>{date(point.timestamp)} · {number(ordered[index].total)} tokens in response · {number(point.total)} cumulative</title></circle>)}
+    <text x="64" y="232">{date(min)}</text><text x="770" y="232" textAnchor="end">{date(ordered.at(-1)!.timestamp)}</text>
   </svg><p>Each point adds the token count reported by one completed response.</p></div>
 }
 
@@ -98,20 +101,21 @@ function SessionDetail({ session, query, onBack, onDelete }: { session: Session;
   return <>
     <button className="text-button" onClick={onBack}>← All conversations</button>
     <div className="detail-heading"><div><p className="eyebrow">CONVERSATION</p><h1>{shortId(session.id)}</h1><p className="mono muted">{session.id}</p></div><button className="delete-button" onClick={onDelete}>Delete local data</button></div>
+    <section className="panel context-panel"><div className="panel-head"><div><p className="eyebrow">CONTEXT</p><h2>Observed details</h2></div></div>
+      <div className="context-grid"><div><span>Models</span><strong>{session.models.join(', ') || 'Unavailable'}</strong></div><div><span>First seen</span><strong>{date(session.firstSeen)}</strong></div><div><span>Last seen</span><strong>{date(session.lastSeen)}</strong></div><div><span>API errors</span><strong>{number(session.errors)}</strong></div><div><span>Tool results</span><strong>{number(session.toolCalls)}</strong></div><div><span>Tool decisions</span><strong>{number(session.approvals)}</strong></div></div>
+    </section>
     <div className="stats detail-stats">
       <Stat label="Observed tokens" value={shown(session.observedTokens)} hint={`${session.tokenTimeline.length} of ${session.completedResponses} completions have counts`} />
       <Stat label="Prompts" value={number(session.prompts)} />
       <Stat label="API requests" value={number(session.apiRequests)} />
       <Stat label="Median request time" value={time(session.medianRequestMs)} />
     </div>
-    <section className="panel context-panel"><div className="panel-head"><div><p className="eyebrow">CONTEXT</p><h2>Observed details</h2></div></div>
-      <div className="context-grid"><div><span>Models</span><strong>{session.models.join(', ') || 'Unavailable'}</strong></div><div><span>First seen</span><strong>{date(session.firstSeen)}</strong></div><div><span>Last seen</span><strong>{date(session.lastSeen)}</strong></div><div><span>API errors</span><strong>{number(session.errors)}</strong></div><div><span>Tool results</span><strong>{number(session.toolCalls)}</strong></div><div><span>Tool decisions</span><strong>{number(session.approvals)}</strong></div></div>
-    </section>
     <div className="two-column"><section className="panel"><div className="panel-head"><div><p className="eyebrow">USAGE</p><h2>Token breakdown</h2></div></div>
       <div className="panel-body"><div className="breakdown-grid"><div><span>Input</span><strong>{shown(session.inputTokens)}</strong></div><div><span>Output</span><strong>{shown(session.outputTokens)}</strong></div><div><span>Cached input</span><strong>{shown(session.cachedInputTokens)}</strong></div><div><span>Cache write</span><strong>{shown(session.cacheWriteTokens)}</strong></div><div><span>Reasoning output</span><strong>{shown(session.reasoningOutputTokens)}</strong></div></div><p className="note">Cached input is included in input. Reasoning output is included in output. Cache-write count is shown separately and not added to observed total.</p></div>
     </section><section className="panel"><div className="panel-head"><div><p className="eyebrow">PERFORMANCE</p><h2>Activity counts</h2></div></div>
       <div className="panel-body"><div className="breakdown-grid"><div><span>Completed responses</span><strong>{number(session.completedResponses)}</strong></div><div><span>API requests</span><strong>{number(session.apiRequests)}</strong></div><div><span>Tool results</span><strong>{number(session.toolCalls)}</strong></div><div><span>Errors</span><strong>{number(session.errors)}</strong></div></div></div>
     </section></div>
+    <section className="panel"><div className="panel-head"><div><p className="eyebrow">USAGE OVER TIME</p><h2>Token timeline</h2></div><span className="chip">{session.tokenTimeline.length} responses with counts</span></div><div className="panel-body"><Timeline points={session.tokenTimeline} /></div></section>
     <section className="panel"><div className="panel-head"><div><p className="eyebrow">RESPONSE USAGE</p><h2>Tokens by completed response</h2></div><span className="chip">{session.tokenTimeline.length} with counts</span></div><div className="panel-body"><ResponseBars points={session.tokenTimeline} /></div></section>
     <div className="two-column"><section className="panel"><div className="panel-head"><div><p className="eyebrow">REQUEST PERFORMANCE</p><h2>API request durations</h2></div><span className="chip">{session.requestTimeline.length} timed</span></div><div className="panel-body"><div className="metric-list">{session.requestTimeline.length ? [...session.requestTimeline].reverse().slice(0, 20).map((request, index) => <div className="metric-row" key={`${request.timestamp}-${index}`}><span>{date(request.timestamp)}</span><strong>{time(request.durationMs)}</strong><small>{request.status || (request.success === false ? 'Failed' : 'Status unavailable')}</small></div>) : <p className="chart-empty">No request durations received.</p>}</div>{session.requestTimeline.length > 20 && <p className="note">Showing the latest 20 of {number(session.requestTimeline.length)} timed requests.</p>}</div></section>
       <section className="panel"><div className="panel-head"><div><p className="eyebrow">TOOL ACTIVITY</p><h2>Tools used</h2></div><span className="chip">{session.toolStats.length}</span></div><div className="panel-body"><div className="metric-list">{session.toolStats.length ? session.toolStats.map((tool) => <div className="metric-row" key={tool.tool}><span>{tool.tool}</span><strong>{number(tool.count)} calls</strong><small>{tool.failures ? `${number(tool.failures)} failed · ` : ''}Median {time(tool.medianDurationMs)}</small></div>) : <p className="chart-empty">No tool-result events received.</p>}</div></div></section></div>
@@ -124,21 +128,23 @@ function SessionDetail({ session, query, onBack, onDelete }: { session: Session;
 export default function App() {
   const { theme, toggleTheme } = useTheme()
   const [period, setPeriod] = useState<Period>('30')
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate] = useState('')
+  const [startDate, setStartDate] = useState(() => localDate(new Date()))
+  const [endDate, setEndDate] = useState(() => localDate(new Date()))
+  const [todayDate, setTodayDate] = useState(() => localDate(new Date()))
+  const [sidebarVisible, setSidebarVisible] = useState(() => localStorage.getItem('dashboard-sidebar-visible') !== 'false')
   const [route, setRoute] = useState(location.hash || '#/')
   const [sessions, setSessions] = useState<Session[]>([])
   const [error, setError] = useState('')
   const [updated, setUpdated] = useState<number | null>(null)
   const query = useMemo(() => {
+    if (period === 'today') return `from=${dayStart(todayDate)}&to=${nextDay(todayDate)}`
     if (period !== 'custom') return `days=${period}`
     if (!startDate || !endDate) return null
-    const start = new Date(`${startDate}T00:00:00`).getTime()
-    const through = new Date(`${endDate}T00:00:00`)
-    through.setDate(through.getDate() + 1)
-    const end = through.getTime()
+    const start = dayStart(startDate)
+    const end = nextDay(endDate)
     return Number.isFinite(start) && Number.isFinite(end) && start < end ? `from=${start}&to=${end}` : null
-  }, [period, startDate, endDate])
+  }, [period, startDate, endDate, todayDate])
+  useEffect(() => { const interval = window.setInterval(() => setTodayDate(localDate(new Date())), 10_000); return () => window.clearInterval(interval) }, [])
   useEffect(() => { const update = () => setRoute(location.hash || '#/'); window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update) }, [])
   useEffect(() => {
     if (!query) return
@@ -176,13 +182,15 @@ export default function App() {
       if (selectedId === session.id) navigate('/sessions')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not delete conversation') }
   }
-  return <div className="app-shell"><aside className="sidebar"><div className="brand">Codex<span>Telemetry</span></div><nav><p className="group-title">WORKSPACE</p><button className={`nav-item ${!sessionsView && !selectedId ? 'active' : ''}`} onClick={() => navigate()}>Dashboard</button><button className={`nav-item ${sessionsView || selectedId ? 'active' : ''}`} onClick={() => navigate('/sessions')}>Conversations</button></nav><div className="sidebar-footer"><div className="receiver-label"><i className="live-dot" /> Local receiver</div><button className="theme-toggle" onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'} <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span></button></div></aside>
-    <main className="main-area"><div className="page-content"><div className="top-status">{error ? <span className="error-message" role="alert">{error}</span> : updated ? `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(updated)}` : 'Waiting for telemetry'}</div>
-      <div className="page-head"><div><p className="eyebrow">CODEX / OBSERVED ACTIVITY</p><h1>{selected ? 'Conversation details' : sessionsView ? 'Conversations' : 'Dashboard'}</h1><p className="subtitle">Local OpenTelemetry data, with no cost estimates or inferred usage.</p></div><div className="filters"><label>Period<select value={period} onChange={(event) => setPeriod(event.target.value as Period)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option><option value="custom">Custom</option></select></label>{period === 'custom' && <><label>From<input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label><label>Through<input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label></>}</div></div>
+  const toggleSidebar = () => setSidebarVisible((visible) => { localStorage.setItem('dashboard-sidebar-visible', String(!visible)); return !visible })
+  const periodFilter = <><label>Period<select value={period} onChange={(event) => setPeriod(event.target.value as Period)}><option value="today">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All time</option><option value="custom">Custom range</option></select></label>{period === 'custom' && <><label>From<input type="date" value={startDate} max={endDate} onChange={(event) => setStartDate(event.target.value)} /></label><label>To<input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label></>}</>
+  return <div className="app-shell">{sidebarVisible && <aside className="sidebar" aria-label="Dashboard navigation"><div className="brand">Codex<span>telemetry</span></div><nav><p className="group-title">WORKSPACE</p><button className={`nav-item ${!sessionsView && !selectedId ? 'active' : ''}`} type="button" onClick={() => navigate()}>Dashboard</button><button className={`nav-item ${sessionsView || selectedId ? 'active' : ''}`} type="button" onClick={() => navigate('/sessions')}>Conversations</button></nav><div className="sidebar-footer"><div className="receiver-label"><i className="live-dot" /> Local receiver</div><button className="theme-toggle" type="button" onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'} <span>{theme === 'dark' ? 'Light' : 'Dark'} mode</span></button><button className="theme-toggle" type="button" onClick={toggleSidebar}>◧ <span>Hide sidebar</span></button></div></aside>}
+    <main className="main-area"><div className="page-content"><div className="top-actions">{!sidebarVisible && <><button className="plain-button" type="button" onClick={toggleSidebar}>☰ Show sidebar</button><button className="plain-button" type="button" onClick={toggleTheme}>{theme === 'dark' ? '☀ Light' : '☾ Dark'} mode</button></>}<span className="top-spacer" /><span className="top-status" role="status">{error ? <span className="error-message" role="alert">{error}</span> : updated ? `Updated ${new Intl.DateTimeFormat(undefined, { timeStyle: 'medium' }).format(updated)}` : 'Waiting for telemetry'}</span></div>
+      {selectedId ? <div className="filters detail-filters">{periodFilter}</div> : <div className="page-head"><div><p className="eyebrow">CODEX / OBSERVED ACTIVITY</p><h1>{sessionsView ? 'Conversations' : 'Dashboard'}</h1><p className="subtitle">Local OpenTelemetry data, with no cost estimates or inferred usage.</p></div><div className="filters">{periodFilter}</div></div>}
       {!query ? <section className="panel empty-state">Choose a valid start and end date.</section> : selectedId ? selected ? <SessionDetail key={`${selected.id}-${query}`} session={selected} query={query} onBack={() => navigate('/sessions')} onDelete={() => void deleteSession(selected)} /> : <section className="panel empty-state">Conversation not found in this period. <button className="text-button" onClick={() => navigate('/sessions')}>Back to conversations</button></section> : sessionsView ? <section className="panel"><div className="panel-head"><div><p className="eyebrow">BROWSE</p><h2>Conversations</h2></div><span className="chip">{sessions.length}</span></div>{sessions.length ? <div className="session-list">{sessions.map((session) => <div className="session-row" key={session.id}><button onClick={() => navigate(`/session/${encodeURIComponent(session.id)}`)}><strong>{shortId(session.id)}</strong><span>{session.models.join(', ') || 'Model unavailable'} · {session.prompts} prompts · {session.apiRequests} requests</span><small>{session.observedTokens === null ? 'Tokens unavailable' : `${number(session.observedTokens)} observed tokens`}</small></button><time>{date(session.lastSeen)}</time></div>)}</div> : <div className="empty-state">No Codex conversations received yet. Start the receiver and send a prompt from Codex.</div>}</section> : <>
         <div className="stats"><Stat label="Conversations" value={number(sessions.length)} hint="Distinct conversation IDs" /><Stat label="Prompts" value={number(prompts)} hint="Prompt events" /><Stat label="Observed tokens" value={withCounts ? compact(observed) : 'Unavailable'} hint={`${withCounts} of ${completions} completions with counts`} /><Stat label="API requests" value={number(requests)} /><Stat label="API errors" value={number(errors)} /><Stat label="Tool results" value={number(tools)} /></div>
-        <section className="panel"><div className="panel-head"><div><p className="eyebrow">USAGE OVER TIME</p><h2>Observed token timeline</h2></div><span className="chip">{withCounts} responses</span></div><div className="panel-body"><Timeline points={points} /></div></section>
-        <section className="panel"><div className="panel-head"><div><p className="eyebrow">ACTIVITY</p><h2>Recent conversations</h2></div><button className="text-button" onClick={() => navigate('/sessions')}>View all →</button></div>{sessions.length ? <div className="session-list">{sessions.slice(0, 8).map((session) => <div className="session-row" key={session.id}><button onClick={() => navigate(`/session/${encodeURIComponent(session.id)}`)}><strong>{shortId(session.id)}</strong><span>{session.models.join(', ') || 'Model unavailable'} · {session.prompts} prompts · {session.apiRequests} requests</span></button><time>{date(session.lastSeen)}</time></div>)}</div> : <div className="empty-state">No telemetry received. See the README for Codex setup.</div>}</section>
+        <section className="panel"><div className="panel-head"><div><p className="eyebrow">USAGE OVER TIME</p><h2>Token timeline</h2></div><span className="chip">{withCounts} responses across {sessions.length} {sessions.length === 1 ? 'conversation' : 'conversations'}</span></div><div className="panel-body"><Timeline points={points} /></div></section>
+        <button className="plain-button browse-button" type="button" onClick={() => navigate('/sessions')}>Browse {sessions.length} {sessions.length === 1 ? 'conversation' : 'conversations'} →</button>
       </>}
       <footer className="footnote">Only observed Codex OTEL fields are stored. Missing token counts remain unavailable.</footer>
     </div></main></div>
