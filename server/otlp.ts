@@ -75,6 +75,11 @@ function timestamp(value: unknown): number | null {
     return Number.isSafeInteger(ms) && ms > 0 ? ms : null
   } catch { return null }
 }
+function timestampText(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null
+  const ms = Date.parse(value)
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : null
+}
 function eventName(attrs: Obj, record: Obj): string | null {
   const raw = label(first(attrs, 'event.name', 'event_name', 'name')) || label(scalar(record.body))
   if (!raw) return null
@@ -99,6 +104,8 @@ export function parseLogs(payload: unknown): CodexEvent[] {
           'thread.id', 'thread_id', 'session.id'), 160)
         const name = eventName(attrs, record)
         const timestampMs = timestamp(record.timeUnixNano)
+          ?? timestampText(first(attrs, 'event.timestamp'))
+          ?? timestamp(record.observedTimeUnixNano)
         if (!conversationId || !name || timestampMs === null) continue
 
         const kind = label(first(attrs, 'event.kind', 'event_kind', 'kind', 'event.type', 'type', 'event'))

@@ -25,7 +25,7 @@ exporter = { otlp-http = { endpoint = "http://127.0.0.1:18766/v1/logs", protocol
 log_user_prompt = true
 ```
 
-Restart Codex, then start a conversation and send a prompt. Codex batches events asynchronously, so they may not appear immediately. The dashboard refreshes every 10 seconds. `log_user_prompt = true` is optional, but required for prompt text. With it enabled, Codex sends raw prompt text to the local receiver; this receiver sanitizes it before storage. Disable prompt text by setting the value to `false` or removing the line.
+Restart Codex, then send a prompt in a new or existing conversation. Codex batches events asynchronously, so they may not appear immediately. The dashboard refreshes every 10 seconds. It records events emitted while the receiver is running; it does not backfill earlier activity. `log_user_prompt = true` is optional, but required for prompt text. With it enabled, Codex sends raw prompt text to the local receiver; this receiver sanitizes it before storage. Disable prompt text by setting the value to `false` or removing the line.
 
 Codex ignores `otel` in a project's `.codex/config.toml`. Configure it in `~/.codex/config.toml` instead. This receiver accepts OTLP **HTTP/JSON logs** only. It does not ingest OTLP protobuf, gRPC, metrics, or traces. Keep the dashboard running while using Codex; it does not backfill earlier conversations. The ports differ from the Claude dashboard so both can run at once.
 
@@ -50,7 +50,7 @@ An **Unavailable** label means the needed field was not observed. “Observed to
 
 The receiver never saves raw OTLP payloads. It stores only event timestamps, conversation ID, model, event kind, tool name, status, success, duration, token counts, and sanitized prompt text. It does not store tool output snippets, request or response bodies, error details, or unknown attributes. The sanitizer masks common credentials, emails, personal identifiers, and long opaque strings, but automated detection cannot guarantee perfect redaction. Keep the database private if prompt export is enabled.
 
-This first version is verified with synthetic OTLP HTTP/JSON records. Codex's documented event list is representative rather than a complete schema, so a live payload should be checked before relying on field-level coverage for a particular Codex version or transport. Unknown events and records without conversation ID or timestamp are ignored. If a documented field appears under a new attribute name, update the allowlist in `server/otlp.ts`.
+This version is verified with synthetic records and a live Codex OTLP HTTP/JSON stream. The live stream uses `timeUnixNano = 0` and supplies the event time in `event.timestamp`; the parser also accepts `observedTimeUnixNano` when needed. Codex's documented event list is representative rather than a complete schema, so field-level coverage may vary with Codex versions and transports. Unknown events and records without conversation ID or any usable timestamp are ignored. If a documented field appears under a new attribute name, update the allowlist in `server/otlp.ts`.
 
 ## Verify
 

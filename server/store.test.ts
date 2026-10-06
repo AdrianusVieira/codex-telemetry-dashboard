@@ -84,3 +84,18 @@ test('ignores records without a conversation ID or a timestamp', () => {
     assert.equal(f.store.sessions().sessions.length, 0)
   } finally { f.close() }
 })
+
+test('uses Codex event timestamp when OTLP timeUnixNano is zero', () => {
+  const f = fixture()
+  try {
+    const eventTime = Date.now() - 2000
+    const observedTime = eventTime + 1000
+    const record = log('user_prompt', { prompt: 'Hello', 'event.timestamp': new Date(eventTime).toISOString() }, eventTime)
+    record.timeUnixNano = '0'
+    const received = { ...record, observedTimeUnixNano: String(BigInt(observedTime) * 1_000_000n) }
+    assert.equal(f.store.ingestLogs(payload(received)), 1)
+    const session = f.store.sessions().sessions[0]
+    assert.equal(session.firstSeen, eventTime)
+    assert.equal(session.prompts, 1)
+  } finally { f.close() }
+})
